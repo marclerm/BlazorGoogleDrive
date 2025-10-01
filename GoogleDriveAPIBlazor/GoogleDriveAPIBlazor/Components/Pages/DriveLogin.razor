@@ -1,0 +1,20 @@
+﻿@using Services
+
+@page "/google-login"
+@inject GoogleOAuthService GoogleService
+
+
+<h3>Access Your Google Drive</h3>
+
+<p>
+    To use this app, you need to log in with your Google account and grant permission to access your Drive files.
+    This allows the app to read and update your <strong>XML</strong>, <strong>TXT</strong>, and <strong>JSON</strong> documents.
+</p>
+
+<p>
+    <a class="btn btn-primary" href="@GoogleService.GetGoogleLoginUrl()">
+        🔐 Login with Google
+    </a>
+</p>
+
+

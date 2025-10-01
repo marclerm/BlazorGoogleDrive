@@ -1,0 +1,53 @@
+﻿@using Services
+@inject GoogleOAuthService GoogleService
+@inject Microsoft.JSInterop.IJSRuntime JS
+
+@implements IDisposable
+
+<div>
+    <button class="btn btn-primary" @onclick="OpenDrivePicker">Click to pick file</button>
+</div>
+
+@code {
+
+    [Parameter]
+    public Google.Apis.Auth.OAuth2.Responses.TokenResponse? GoogleToken { get; set; }
+    [Parameter]
+    public EventCallback<GoogleFileModel> OnFilePicked { get; set; }
+
+    private DotNetObjectReference<PickFile>? _objRef;
+
+    protected override void OnInitialized()
+    {
+        _objRef = DotNetObjectReference.Create(this);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if(firstRender)
+            await JS.InvokeVoidAsync("picker_registerDotNetRef", _objRef);
+    }
+
+    private async Task OpenDrivePicker()
+    {
+        string developerAPIKey = GoogleService.GetApiKey();
+        string token = GoogleToken.AccessToken; // from Google OAuth
+        await JS.InvokeVoidAsync("showPicker", developerAPIKey, token, "onPicked");
+    }
+
+    [JSInvokable("OnDriveFilePicked")]
+    public void OnDriveFilePicked(string id, string name, string mimeType)
+    {
+        Console.WriteLine($"Picked: {name} ({id})");
+        var fileModel = new GoogleFileModel
+        {
+            Id = id,
+            Name = name,
+            MimeType = mimeType ?? "application/octet-stream" // Default mime type, can be adjusted
+        };
+        // Trigger the callback to notify the parent component
+        OnFilePicked.InvokeAsync(fileModel);
+    }
+
+    public void Dispose() => _objRef?.Dispose();
+}

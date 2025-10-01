@@ -1,0 +1,184 @@
+﻿@page "/auth/google/callback"
+@rendermode InteractiveServer
+
+@using GoogleDriveAPIBlazor.Components.DriveFiles
+@using Services
+@inject NavigationManager Navigation
+@inject GoogleOAuthService GoogleService
+@inject Microsoft.JSInterop.IJSRuntime JS
+
+<h3>Google Drive Files</h3>
+<div class="container">
+    <ul class="nav nav-tabs" role="tablist">
+        <li class="btn nav-item" role="presentation">
+            <a class="nav-link active" id="simple-tab-0" data-bs-toggle="tab" data-bs-target="#all-files-tab" role="tab" aria-controls="all-files-tab" aria-selected="true">All files</a>
+        </li>
+        <li class="btn nav-item" role="presentation">
+            <a class="nav-link" id="simple-tab-1" data-bs-toggle="tab" data-bs-target="#picker-files-tab" role="tab" aria-controls="picker-files-tab" aria-selected="false">Pick a file</a>
+        </li>
+    </ul>
+    <div class="tab-content pt-5" id="tab-content">
+        <div class="tab-pane active" id="all-files-tab" role="tabpanel" aria-labelledby="simple-tab-0">
+            <h3>All files filtered by extension (.xml, .txt & .json)</h3>
+            <AllFiles DriveFiles="files" GoogleToken="_token" OnEditFile="StartEditFile"></AllFiles>
+        </div>
+        <div class="tab-pane" id="picker-files-tab" role="tabpanel" aria-labelledby="simple-tab-1">
+            <h3>Select a file to open</h3>
+            <PickFile GoogleToken="_token" OnFilePicked="StartEditFile" />
+        </div>
+    </div>
+</div>
+
+@if (_editingFileId is not null)
+{
+    <div class="card mt-3">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <strong>Editing: @_editingName</strong>
+            <small class="text-muted">@_editingMime</small>
+        </div>
+        <div class="card-body">
+            <textarea class="form-control" rows="14" @bind="_textContent"></textarea>
+            <div class="mt-2 d-flex gap-2">
+                <button class="btn btn-sm btn-primary"
+                        disabled="@_saving"
+                        @onclick="SaveFile">
+                    @if (_saving)
+                    {
+                        <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                    }
+                    else
+                    {
+
+                        <span>Save</span>
+                    }
+                </button>
+                <button class="btn btn-sm btn-outline-secondary"
+                        disabled="@_saving"
+                        @onclick="CancelEdit">
+                    Cancel
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+
+
+@code {
+    private List<GoogleDriveAPIBlazor.Services.GoogleFileModel>? files;
+    private Google.Apis.Auth.OAuth2.Responses.TokenResponse? _token;
+
+    // Edit state
+    private string? _editingFileId;
+    private string? _editingName;
+    private string? _editingMime;
+    private string _textContent = string.Empty;
+    private bool _saving;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;  // run only after the interactive connection is up
+
+        var uri = Navigation.ToAbsoluteUri(Navigation.Uri);
+        var query = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(uri.Query);
+
+        if (query.TryGetValue("code", out var code))
+        {
+            try
+            {
+                _token = await GoogleService.ExchangeCodeForTokenAsync(code);
+                files = await GoogleService.GetDriveFilesAsync(_token, "current-user");
+                StateHasChanged(); // render the list now that we have data
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"OAuth/Drive load failed: {ex}");
+            }
+        }
+
+        await JS.InvokeVoidAsync("onGapiLoad", null);
+    }
+
+    #region Edit File State
+
+    private async Task StartEditFile(GoogleFileModel file)
+    {
+        if (_token is null) return;
+
+        try
+        {
+            var mime = string.IsNullOrWhiteSpace(file.MimeType)
+                ? GetMimeFromName(file.Name)
+                : file.MimeType;
+
+            // Only downloads bytes; uses metadata you already have
+            var (bytes, name, resolvedMime) =
+                await GoogleService.GetFileBytesAsync(_token, file.Id, file.Name, mime, "current-user");
+
+            _editingFileId = file.Id;
+            _editingName = name;
+            _editingMime = resolvedMime;
+
+            // Treat as UTF-8 text (good for .xml; adjust if file is binary)
+            _textContent = System.Text.Encoding.UTF8.GetString(bytes);
+
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Open for edit failed: {ex.Message}");
+            _editingFileId = null;
+        }
+        finally
+        {
+            StateHasChanged();
+        }
+    }
+
+    private async Task SaveFile()
+    {
+        if (_token is null || _editingFileId is null) return;
+        _saving = true; StateHasChanged();
+
+        try
+        {
+            var mime = GetMimeFromName(_editingName);
+            await GoogleService.UpdateTextFileAsync(_token, _editingFileId, _textContent, mime, "current-user");
+            // Optionally refresh the list to reflect updated timestamps, etc.
+            files = await GoogleService.GetDriveFilesAsync(_token, "current-user");
+            StateHasChanged();
+            // Show success alert
+            await JS.InvokeVoidAsync("alert", $"File '{_editingName}' saved successfully! \nGo to files table to see the last update.");
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Save failed: {ex.Message}");
+        }
+        finally
+        {
+            _saving = false;
+            // keep editor open; close if you prefer:
+             _editingFileId = null;
+            StateHasChanged();
+        }
+    }
+
+    private void CancelEdit()
+    {
+        _editingFileId = null;
+        _textContent = string.Empty;
+        _editingMime = null;
+        _editingName = null;
+    }
+
+    private static string GetMimeFromName(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return "application/octet-stream";
+        if (name.EndsWith(".xml", StringComparison.OrdinalIgnoreCase)) return "application/xml";
+        if (name.EndsWith(".txt", StringComparison.OrdinalIgnoreCase)) return "application/octet-stream";
+        if (name.EndsWith(".json", StringComparison.OrdinalIgnoreCase)) return "application/octet-stream";
+        return "application/octet-stream";
+    }
+    #endregion
+    
+}
